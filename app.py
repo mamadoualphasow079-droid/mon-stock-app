@@ -5,6 +5,7 @@ import os
 
 # --- INITIALISATION DE L'ÉTAT ET DE LA BASE DE DONNÉES ---
 
+# Initialisation des paniers (Crédit et Comptant)
 if 'cart_credit' not in st.session_state:
     st.session_state['cart_credit'] = []
 if 'cart_cash' not in st.session_state:
@@ -158,6 +159,7 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                     exec_query(sql_update_solde, (total_panier, client_id))
                 
                 for item in current_cart:
+                    # Seul le premier article porte le montant total du crédit pour éviter de compter la dette plusieurs fois
                     is_credit_transaction = montant_credit if item == current_cart[0] else 0.0
                     
                     sql_vente = "INSERT INTO ventes (produit_id, quantite, client_id, montant_credit) VALUES (%s, %s, %s, %s)"
@@ -174,9 +176,11 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                     clear_cart_cash()
                     
                 st.rerun() 
+
 # --- Menu Principal ---
 menu = st.sidebar.radio("Menu", ["Vendre", "Clients & Crédit", "Remboursement Client", "Historique Ventes", "Stock", "Ajouter Produit"])
-# --- SECTION VENDRE AVEC SÉPARATION (LIGNE OÙ L'ERREUR SE PRODUISAIT) ---
+
+# --- SECTION VENDRE AVEC SÉPARATION ---
 elif menu == "Vendre":
     st.header("Sélectionner le Type de Transaction")
     
@@ -369,9 +373,10 @@ elif menu == "Historique Ventes":
     
     where_clause = ""
     if filtre_mode == "Ventes à Crédit 💳":
+        # Crédit: Lignes où le montant du crédit est enregistré (première ligne de la transaction)
         where_clause = "v.montant_credit > 0"
     elif filtre_mode == "Ventes Comptant 💵":
-        # Une vente comptant est une vente avec un client_id mais sans montant_credit sur la ligne principale
+        # Comptant: Lignes où un client est sélectionné mais aucun crédit n'est enregistré
         where_clause = "v.client_id IS NOT NULL AND v.montant_credit = 0"
     
     where_sql = f"WHERE {where_clause}" if where_clause else ""
@@ -414,4 +419,3 @@ elif menu == "Ajouter Produit":
             sql = "INSERT INTO produits (nom, prix, quantite) VALUES (%s, %s, %s)"
             exec_query(sql, (nom, prix, qty))
             st.success(f"✅ Produit '{nom}' ajouté !")
-            
