@@ -5,7 +5,6 @@ import os
 
 # --- INITIALISATION DE L'ÉTAT ET DE LA BASE DE DONNÉES ---
 
-# Initialisation des paniers (Crédit et Comptant)
 if 'cart_credit' not in st.session_state:
     st.session_state['cart_credit'] = []
 if 'cart_cash' not in st.session_state:
@@ -159,7 +158,6 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                     exec_query(sql_update_solde, (total_panier, client_id))
                 
                 for item in current_cart:
-                    # Seul le premier article porte le montant total du crédit pour éviter de compter la dette plusieurs fois
                     is_credit_transaction = montant_credit if item == current_cart[0] else 0.0
                     
                     sql_vente = "INSERT INTO ventes (produit_id, quantite, client_id, montant_credit) VALUES (%s, %s, %s, %s)"
@@ -177,15 +175,22 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                     
                 st.rerun() 
 
-# --- Menu Principal ---
-menu = st.sidebar.radio("Menu", ["Vendre", "Clients & Crédit", "Remboursement Client", "Historique Ventes", "Stock", "Ajouter Produit"])
 
-elif menu == "Vendre":
+# --- NOUVEAU SYSTÈME DE NAVIGATION PAR ONGLETS ---
+
+tab_vendre, tab_clients, tab_remb, tab_historique, tab_stock, tab_ajouter = st.tabs(
+    ["Vendre 🛒", "Clients & Crédit 👤", "Remboursement Client 💵", "Historique Ventes 🧾", "Stock 📦", "Ajouter Produit ➕"]
+)
+
+# ----------------------------------------------------
+#               ONGLET : VENDRE
+# ----------------------------------------------------
+with tab_vendre:
     st.header("Sélectionner le Type de Transaction")
     
     tab_credit, tab_cash = st.tabs(["Vente à Crédit 💳", "Vente Comptant 💵"])
 
-    # ONGLET CRÉDIT
+    # SOUS-ONGLET CRÉDIT
     with tab_credit:
         st.subheader("1. Ajouter des articles au panier Crédit")
         col_add, col_finalize = st.columns([1, 1])
@@ -209,7 +214,7 @@ elif menu == "Vendre":
         with col_finalize:
             handle_sale('cart_credit', is_credit_sale=True)
 
-    # ONGLET COMPTANT
+    # SOUS-ONGLET COMPTANT
     with tab_cash:
         st.subheader("1. Ajouter des articles au panier Comptant")
         col_add, col_finalize = st.columns([1, 1])
@@ -234,8 +239,10 @@ elif menu == "Vendre":
             handle_sale('cart_cash', is_credit_sale=False, client_selection_optional=True)
 
 
-# --- SECTION REMBOURSEMENT CLIENT ---
-elif menu == "Remboursement Client":
+# ----------------------------------------------------
+#               ONGLET : REMBOURSEMENT CLIENT
+# ----------------------------------------------------
+with tab_remb:
     st.header("💵 Enregistrement d'un Paiement/Avance Client")
 
     clients_db = exec_query("SELECT id, nom, solde_du FROM clients WHERE solde_du > 0 ORDER BY nom", fetch=True)
@@ -271,8 +278,10 @@ elif menu == "Remboursement Client":
                     st.success(f"✅ Paiement de {montant_paye:.2f} € enregistré pour {choix_client_remb}. Nouveau solde dû: {nouveau_solde:.2f} €.")
                     st.rerun()
 
-# --- SECTION CLIENTS & CRÉDIT ---
-elif menu == "Clients & Crédit":
+# ----------------------------------------------------
+#               ONGLET : CLIENTS & CRÉDIT
+# ----------------------------------------------------
+with tab_clients:
     st.header("Gestion des Clients, Plafonds et Historique")
 
     with st.expander("➕ Ajouter un nouveau client"):
@@ -360,8 +369,10 @@ elif menu == "Clients & Crédit":
         st.info("Veuillez ajouter un client.")
 
 
-# --- SECTION HISTORIQUE VENTES ---
-elif menu == "Historique Ventes":
+# ----------------------------------------------------
+#               ONGLET : HISTORIQUE VENTES
+# ----------------------------------------------------
+with tab_historique:
     st.header("Historique de Toutes les Transactions")
     
     filtre_mode = st.radio(
@@ -372,10 +383,8 @@ elif menu == "Historique Ventes":
     
     where_clause = ""
     if filtre_mode == "Ventes à Crédit 💳":
-        # Crédit: Lignes où le montant du crédit est enregistré (première ligne de la transaction)
         where_clause = "v.montant_credit > 0"
     elif filtre_mode == "Ventes Comptant 💵":
-        # Comptant: Lignes où un client est sélectionné mais aucun crédit n'est enregistré
         where_clause = "v.client_id IS NOT NULL AND v.montant_credit = 0"
     
     where_sql = f"WHERE {where_clause}" if where_clause else ""
@@ -400,14 +409,19 @@ elif menu == "Historique Ventes":
     st.dataframe(df_history, use_container_width=True)
 
 
-# --- SECTIONS STOCK ET AJOUT PRODUIT ---
-elif menu == "Stock":
+# ----------------------------------------------------
+#               ONGLET : STOCK
+# ----------------------------------------------------
+with tab_stock:
     st.header("État du Stock Actuel")
     sql = "SELECT id, nom, prix, quantite FROM produits ORDER BY id"
     df = pd.read_sql(sql, get_db_connection())
     st.dataframe(df, use_container_width=True)
 
-elif menu == "Ajouter Produit":
+# ----------------------------------------------------
+#               ONGLET : AJOUTER PRODUIT
+# ----------------------------------------------------
+with tab_ajouter:
     st.header("Nouveau Produit")
     with st.form("ajout_produit_form_simple"):
         nom = st.text_input("Nom du produit")
