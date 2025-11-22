@@ -21,11 +21,9 @@ def get_db_connection():
         conn = psycopg2.connect(url)
         return conn
     except Exception as e:
-        # st.error(f"Erreur de connexion à la base de données : {e}")
         return None
 
 def exec_query(sql, params=None, fetch=False):
-    """Exécute une requête et retourne les résultats si fetch est True."""
     conn = get_db_connection()
     if conn is None:
         return [] if fetch else None
@@ -43,12 +41,11 @@ def exec_query(sql, params=None, fetch=False):
         if conn: conn.close()
         pass 
     except Exception as e:
-        # st.error(f"Erreur d'exécution de la requête : {e}")
         if conn: conn.close()
         return [] if fetch else None
 
 def init_db_structure():
-    """Crée les tables et colonnes si elles n'existent pas (Méthode de rattrapage)."""
+    """Crée les tables et colonnes si elles n'existent pas."""
     exec_query("""CREATE TABLE IF NOT EXISTS produits (id SERIAL PRIMARY KEY, nom TEXT NOT NULL, prix REAL, quantite INTEGER)""")
     exec_query("""CREATE TABLE IF NOT EXISTS ventes (id SERIAL PRIMARY KEY, produit_id INTEGER REFERENCES produits(id), quantite INTEGER, date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
     exec_query("""CREATE TABLE IF NOT EXISTS clients (id SERIAL PRIMARY KEY, nom TEXT NOT NULL, adresse TEXT, plafond_credit REAL DEFAULT 0.0, solde_du REAL DEFAULT 0.0)""")
@@ -60,7 +57,7 @@ def init_db_structure():
 if 'db_structure_ok' not in st.session_state:
     init_db_structure()
     st.session_state['db_structure_ok'] = True
-    st.success("Configuration de la base de données terminée (clients, crédit, paiements)!")
+    st.success("Configuration de la base de données terminée!")
 
 
 # --- FONCTIONS DU PANIER ---
@@ -124,9 +121,8 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
         option_client = {c[1]: (c[0], c[2], c[3]) for c in clients_db} 
         client_choices = ["(Optionnel) Choisir un client"] + list(option_client.keys())
         
-        # Le choix "Vente comptant (Payé immédiatement)" est utilisé uniquement pour l'affichage dans la DB si client non sélectionné
         if not client_selection_optional:
-             client_choices.pop(0) # Enlève l'optionnel si c'est une vente à crédit
+             client_choices.pop(0)
 
         with st.form(f"form_finalize_sale_{cart_key}"):
             
@@ -142,12 +138,10 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                 client_id = None
                 montant_credit = 0.0
                 
-                # Récupération du Client ID
                 if choix_client and choix_client != "(Optionnel) Choisir un client":
                     cid, solde_du, plafond = option_client[choix_client]
                     client_id = cid
                 
-                # Logique de Vente À CRÉDIT
                 if is_credit_sale:
                     if not client_id:
                         st.error("❌ Veuillez sélectionner un client pour une vente à crédit.")
@@ -160,22 +154,15 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                     
                     montant_credit = total_panier
                     
-                    # Mise à jour du solde dû du client (GLOBALISÉ)
                     sql_update_solde = "UPDATE clients SET solde_du = solde_du + %s WHERE id = %s"
                     exec_query(sql_update_solde, (total_panier, client_id))
                 
-                # Logique de Vente COMPTANT (stock et historique uniquement)
-                
-                # Enregistrement et Stock
                 for item in current_cart:
-                    # Enregistrement de la Vente (on enregistre le crédit/cash)
-                    # Seulement le premier article porte le montant total du crédit pour ne pas dupliquer la somme
                     is_credit_transaction = montant_credit if item == current_cart[0] else 0.0
                     
                     sql_vente = "INSERT INTO ventes (produit_id, quantite, client_id, montant_credit) VALUES (%s, %s, %s, %s)"
                     exec_query(sql_vente, (item['id'], item['quantite'], client_id, is_credit_transaction))
                     
-                    # Mise à jour du Stock
                     sql_stock = "UPDATE produits SET quantite = quantite - %s WHERE id = %s"
                     exec_query(sql_stock, (item['quantite'], item['id']))
                 
@@ -188,16 +175,16 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                     
                 st.rerun() 
 
-# --- SECTION VENDRE AVEC SÉPARATION ---
+# --- Menu Principal ---
+menu = st.sidebar.radio("Menu", ["Vendre", "Clients & Crédit", "Remboursement Client", "Historique Ventes", "Stock", "Ajouter Produit"])
 
+# --- SECTION VENDRE AVEC SÉPARATION (LIGNE OÙ L'ERREUR SE PRODUISAIT) ---
 elif menu == "Vendre":
     st.header("Sélectionner le Type de Transaction")
     
     tab_credit, tab_cash = st.tabs(["Vente à Crédit 💳", "Vente Comptant 💵"])
 
-    # ----------------------------------------
-    #             ONGLET CRÉDIT
-    # ----------------------------------------
+    # ONGLET CRÉDIT
     with tab_credit:
         st.subheader("1. Ajouter des articles au panier Crédit")
         col_add, col_finalize = st.columns([1, 1])
@@ -221,9 +208,7 @@ elif menu == "Vendre":
         with col_finalize:
             handle_sale('cart_credit', is_credit_sale=True)
 
-    # ----------------------------------------
-    #             ONGLET COMPTANT
-    # ----------------------------------------
+    # ONGLET COMPTANT
     with tab_cash:
         st.subheader("1. Ajouter des articles au panier Comptant")
         col_add, col_finalize = st.columns([1, 1])
@@ -249,7 +234,6 @@ elif menu == "Vendre":
 
 
 # --- SECTION REMBOURSEMENT CLIENT ---
-
 elif menu == "Remboursement Client":
     st.header("💵 Enregistrement d'un Paiement/Avance Client")
 
@@ -287,7 +271,6 @@ elif menu == "Remboursement Client":
                     st.rerun()
 
 # --- SECTION CLIENTS & CRÉDIT ---
-
 elif menu == "Clients & Crédit":
     st.header("Gestion des Clients, Plafonds et Historique")
 
@@ -346,15 +329,12 @@ elif menu == "Clients & Crédit":
         
         if not df_ventes.empty:
             
-            # Ajout du statut Crédit/Comptant
             df_ventes['Mode de Paiement'] = df_ventes['Crédit total'].apply(lambda x: "CRÉDIT" if x > 0 else "COMPTANT")
             
-            # Nettoyage de la colonne 'Crédit total' pour l'affichage (ne garder que les lignes de crédit)
             df_ventes['Montant Crédit (€)'] = df_ventes.apply(
                 lambda row: row['Crédit total'] if row['Mode de Paiement'] == 'CRÉDIT' else 0.0, axis=1
             )
             
-            # Afficher uniquement les colonnes pertinentes
             st.dataframe(df_ventes[['Date Vente', 'Produit', 'Qté', 'Montant Crédit (€)', 'Mode de Paiement']], use_container_width=True)
         else:
             st.info(f"{choix_client_hist} n'a pas de ventes enregistrées (ni comptant, ni crédit).")
@@ -379,21 +359,22 @@ elif menu == "Clients & Crédit":
         st.info("Veuillez ajouter un client.")
 
 
-# --- SECTION HISTORIQUE VENTES (AJOUT DU FILTRE) ---
-
+# --- SECTION HISTORIQUE VENTES ---
 elif menu == "Historique Ventes":
     st.header("Historique de Toutes les Transactions")
     
-    # Filtre
     filtre_mode = st.radio(
         "Filtrer par Mode de Paiement",
         ("Toutes les ventes", "Ventes à Crédit 💳", "Ventes Comptant 💵"),
         horizontal=True
     )
     
-    where_clause = "v.client_id IS NOT NULL" if filtre_mode == "Ventes Comptant 💵" else ""
+    where_clause = ""
     if filtre_mode == "Ventes à Crédit 💳":
         where_clause = "v.montant_credit > 0"
+    elif filtre_mode == "Ventes Comptant 💵":
+        # Une vente comptant est une vente avec un client_id mais sans montant_credit sur la ligne principale
+        where_clause = "v.client_id IS NOT NULL AND v.montant_credit = 0"
     
     where_sql = f"WHERE {where_clause}" if where_clause else ""
     
@@ -417,8 +398,7 @@ elif menu == "Historique Ventes":
     st.dataframe(df_history, use_container_width=True)
 
 
-# --- SECTIONS SECONDAIRES ---
-
+# --- SECTIONS STOCK ET AJOUT PRODUIT ---
 elif menu == "Stock":
     st.header("État du Stock Actuel")
     sql = "SELECT id, nom, prix, quantite FROM produits ORDER BY id"
