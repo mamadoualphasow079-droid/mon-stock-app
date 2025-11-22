@@ -416,3 +416,4 @@ elif menu == "Ajouter Produit":
             sql = "INSERT INTO produits (nom, prix, quantite) VALUES (%s, %s, %s)"
             exec_query(sql, (nom, prix, qty))
             st.success(f"✅ Produit '{nom}' ajouté !")
+            
