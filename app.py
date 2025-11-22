@@ -179,7 +179,6 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
 
 # --- Menu Principal ---
 menu = st.sidebar.radio("Menu", ["Vendre", "Clients & Crédit", "Remboursement Client", "Historique Ventes", "Stock", "Ajouter Produit"])
-
 # --- SECTION VENDRE AVEC SÉPARATION ---
 elif menu == "Vendre":
     st.header("Sélectionner le Type de Transaction")
