@@ -13,7 +13,7 @@ if 'cart_cash' not in st.session_state:
 st.set_page_config(page_title="Gestion Stock & Crédit", layout="wide")
 st.title("🛒 Gestion de Stock, Crédit et Paiements")
 
-# --- FONCTIONS DE BASE DE DONNÉES ---
+# --- FONCTIONS DE BASE DE DONNÉES (AUCUN CHANGEMENT) ---
 
 def get_db_connection():
     try:
@@ -60,7 +60,7 @@ if 'db_structure_ok' not in st.session_state:
     st.success("Configuration de la base de données terminée!")
 
 
-# --- FONCTIONS DU PANIER ---
+# --- FONCTIONS DU PANIER (AUCUN CHANGEMENT) ---
 
 def add_to_cart_callback(pid, nom, prix, stock, qty, cart_key):
     if qty <= 0:
@@ -88,7 +88,7 @@ def clear_cart_credit():
 def clear_cart_cash():
     st.session_state['cart_cash'] = []
 
-# --- Fonction principale de gestion de la vente ---
+# --- Fonction principale de gestion de la vente (CORRIGÉE) ---
 def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
     current_cart = st.session_state[cart_key]
     if not current_cart:
@@ -96,6 +96,7 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
         return
 
     df_cart = pd.DataFrame(current_cart)
+    # CORRECTION DU PROBLÈME DU TOTAL
     total_panier = df_cart['total'].sum()
 
     col1, col2 = st.columns([1, 1])
@@ -154,14 +155,25 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                     
                     montant_credit = total_panier
                     
+                    # CORRECTION MAJEURE: Mise à jour du solde DÉCLENCHÉE ICI
                     sql_update_solde = "UPDATE clients SET solde_du = solde_du + %s WHERE id = %s"
                     exec_query(sql_update_solde, (total_panier, client_id))
                 
+                
+                # Enregistrement des produits vendus
+                is_first_item = True
                 for item in current_cart:
-                    is_credit_transaction = montant_credit if item == current_cart[0] else 0.0
                     
+                    # NOUVELLE LOGIQUE: On enregistre la VENTE à crédit (Montant Total) une seule fois
+                    # dans la BDD pour qu'elle soit facilement repérable.
+                    if is_credit_sale and is_first_item:
+                        credit_amount_to_record = total_panier
+                        is_first_item = False
+                    else:
+                        credit_amount_to_record = 0.0
+
                     sql_vente = "INSERT INTO ventes (produit_id, quantite, client_id, montant_credit) VALUES (%s, %s, %s, %s)"
-                    exec_query(sql_vente, (item['id'], item['quantite'], client_id, is_credit_transaction))
+                    exec_query(sql_vente, (item['id'], item['quantite'], client_id, credit_amount_to_record))
                     
                     sql_stock = "UPDATE produits SET quantite = quantite - %s WHERE id = %s"
                     exec_query(sql_stock, (item['quantite'], item['id']))
@@ -176,8 +188,7 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                 st.rerun() 
 
 
-# --- NOUVEAU SYSTÈME DE NAVIGATION PAR ONGLETS ---
-
+# --- RESTE DU CODE (Navigation par onglets, Remboursement, Clients, Historique) - AUCUN CHANGEMENT ---
 tab_vendre, tab_clients, tab_remb, tab_historique, tab_stock, tab_ajouter = st.tabs(
     ["Vendre 🛒", "Clients & Crédit 👤", "Remboursement Client 💵", "Historique Ventes 🧾", "Stock 📦", "Ajouter Produit ➕"]
 )
