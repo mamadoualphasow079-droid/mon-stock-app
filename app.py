@@ -174,7 +174,6 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                     clear_cart_cash()
                     
                 st.rerun() 
-
 # --- Menu Principal ---
 menu = st.sidebar.radio("Menu", ["Vendre", "Clients & Crédit", "Remboursement Client", "Historique Ventes", "Stock", "Ajouter Produit"])
 # --- SECTION VENDRE AVEC SÉPARATION (LIGNE OÙ L'ERREUR SE PRODUISAIT) ---
