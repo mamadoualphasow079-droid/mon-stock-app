@@ -3,8 +3,9 @@ import pandas as pd
 import psycopg2
 import os
 
-# --- INITIALISATION DE L'ÉTAT ET DE LA BASE DE DONNÉES ---
+# --- INITIALISATION DE L'ÉTAT ET DE LA CONFIGURATION ---
 
+# Initialisation des paniers dans la session state
 if 'cart_credit' not in st.session_state:
     st.session_state['cart_credit'] = []
 if 'cart_cash' not in st.session_state:
@@ -13,14 +14,14 @@ if 'cart_cash' not in st.session_state:
 st.set_page_config(page_title="Gestion Stock & Crédit", layout="wide")
 st.title("🛒 Gestion de Stock, Crédit et Paiements")
 
-# --- FONCTIONS DE BASE DE DONNÉES (RÉ-INCLUSES POUR LA VÉRIFICATION) ---
+# --- FONCTIONS DE BASE DE DONNÉES SÉCURISÉES ---
 
 def get_db_connection():
+    """Tente d'établir une connexion à la base de données."""
     try:
-        # Assurez-vous que la variable d'environnement DATABASE_URL est bien configurée sur Render/GitHub
         url = os.environ.get('DATABASE_URL')
         if not url:
-            st.error("DATABASE_URL non configuré. Veuillez vérifier les secrets de l'application.")
+            st.error("DATABASE_URL non configuré. Vérifiez les secrets de l'application.")
             return None
         conn = psycopg2.connect(url)
         return conn
@@ -29,6 +30,7 @@ def get_db_connection():
         return None
 
 def exec_query(sql, params=None, fetch=False):
+    """Exécute une requête SQL."""
     conn = get_db_connection()
     if conn is None:
         return [] if fetch else None
@@ -42,37 +44,30 @@ def exec_query(sql, params=None, fetch=False):
             return result
         conn.commit()
         conn.close()
-    except psycopg2.errors.DuplicateColumn:
-        if conn: conn.close()
-        pass 
     except Exception as e:
         if conn: conn.close()
-        st.error(f"Erreur d'exécution SQL: {e}")
+        # st.warning(f"Note SQL (peut être une colonne déjà existante): {e}")
         return [] if fetch else None
 
 def init_db_structure():
-    """Crée les tables et colonnes si elles n'existent pas."""
-    # Création des tables
+    """Crée les tables et colonnes si elles n'existent pas (utilise des requêtes courtes)."""
     exec_query("""CREATE TABLE IF NOT EXISTS produits (id SERIAL PRIMARY KEY, nom TEXT NOT NULL, prix REAL, quantite INTEGER)""")
     exec_query("""CREATE TABLE IF NOT EXISTS ventes (id SERIAL PRIMARY KEY, produit_id INTEGER REFERENCES produits(id), quantite INTEGER, date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
     exec_query("""CREATE TABLE IF NOT EXISTS clients (id SERIAL PRIMARY KEY, nom TEXT NOT NULL, adresse TEXT, plafond_credit REAL DEFAULT 0.0, solde_du REAL DEFAULT 0.0)""")
     exec_query("""CREATE TABLE IF NOT EXISTS paiements (id SERIAL PRIMARY KEY, client_id INTEGER REFERENCES clients(id) NOT NULL, montant REAL NOT NULL, date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
 
-    # Ajout des colonnes si elles manquent (pour la compatibilité)
-    try:
-        exec_query("ALTER TABLE ventes ADD COLUMN client_id INTEGER REFERENCES clients(id)")
-    except: pass
-    try:
-        exec_query("ALTER TABLE ventes ADD COLUMN montant_credit REAL DEFAULT 0.0")
-    except: pass
+    # Ajout des colonnes pour la compatibilité (ignorer l'erreur si elles existent)
+    exec_query("ALTER TABLE ventes ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id)")
+    exec_query("ALTER TABLE ventes ADD COLUMN IF NOT EXISTS montant_credit REAL DEFAULT 0.0")
+
 
 if 'db_structure_ok' not in st.session_state:
     init_db_structure()
     st.session_state['db_structure_ok'] = True
-    # st.success("Configuration de la base de données vérifiée.")
+    # st.info("Structure de la base de données vérifiée et initialisée.")
 
 
-# --- FONCTIONS DU PANIER (CORRIGÉES) ---
+# --- FONCTIONS DU PANIER (CORRECTION DU CALCUL D'ACCUMULATION) ---
 
 def add_to_cart_callback(pid, nom, prix, stock, qty, cart_key):
     if qty <= 0:
@@ -84,22 +79,21 @@ def add_to_cart_callback(pid, nom, prix, stock, qty, cart_key):
         
     item_total = prix * qty
     
-    # Correction: On vérifie si le produit est déjà dans le panier pour éviter les doublons ou conflits de clés
+    # Correction: Mise à jour de la quantité si l'article existe déjà pour éviter de doubler la ligne
     for item in st.session_state[cart_key]:
         if item['id'] == pid:
             item['quantite'] += qty
             item['total'] += item_total
-            st.success(f"➕ Quantité de {nom} mise à jour dans le panier.")
+            st.success(f"➕ Quantité de {nom} mise à jour dans le panier. Total actuel: {item['total']:.2f} €.")
             return
 
-    # Si ce n'est pas un ajout mais un nouvel article
+    # Si c'est un nouvel article
     st.session_state[cart_key].append({
         'id': pid,
         'nom': nom,
         'prix_u': prix,
         'quantite': qty,
         'total': item_total,
-        'stock_dispo': stock # Stock original au moment de l'ajout (pour référence)
     })
     
     st.success(f"➕ {qty} x {nom} (Total: {item_total:.2f} €) ajouté au panier.")
@@ -109,7 +103,7 @@ def clear_cart_credit():
 def clear_cart_cash():
     st.session_state['cart_cash'] = []
 
-# --- Fonction principale de gestion de la vente (CORRIGÉE ET SIMPLIFIÉE) ---
+# --- Fonction principale de gestion de la vente (CORRECTION DE L'ENREGISTREMENT CRÉDIT) ---
 def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
     current_cart = st.session_state[cart_key]
     if not current_cart:
@@ -117,7 +111,7 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
         return
 
     df_cart = pd.DataFrame(current_cart)
-    # Ceci garantit le total correct de tous les articles dans la liste
+    # GARANTIE : Le total est la somme de la colonne 'total' de tous les articles.
     total_panier = df_cart['total'].sum() 
 
     col1, col2 = st.columns([1, 1])
@@ -129,7 +123,6 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
             column_config={"nom": "Produit", "quantite": "Qté", "prix_u": st.column_config.NumberColumn("Prix U.", format="%.2f €"), "total": st.column_config.NumberColumn("Total", format="%.2f €")},
             hide_index=True, use_container_width=True
         )
-        # Le total affiché sera désormais la somme garantie
         st.metric("TOTAL DE LA VENTE", value=f"{total_panier:.2f} €")
         
         if is_credit_sale:
@@ -140,11 +133,13 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
     with col2:
         st.subheader("Finalisation de la Transaction")
         
-        clients_db = exec_query("SELECT id, nom, solde_du, plafond_credit FROM clients", fetch=True)
+        sql_clients_list = """SELECT id, nom, solde_du, plafond_credit FROM clients"""
+        clients_db = exec_query(sql_clients_list, fetch=True)
         option_client = {c[1]: (c[0], c[2], c[3]) for c in clients_db} 
+        
         client_choices = ["(Optionnel) Choisir un client"] + list(option_client.keys())
         
-        if not client_selection_optional:
+        if not client_selection_optional and "(Optionnel) Choisir un client" in client_choices:
              client_choices.pop(0)
 
         with st.form(f"form_finalize_sale_{cart_key}"):
@@ -159,12 +154,13 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
             if st.form_submit_button(f"✅ Valider la Vente ({'CRÉDIT' if is_credit_sale else 'COMPTANT'})"):
                 
                 client_id = None
+                montant_credit_transaction = 0.0
                 
                 if choix_client and choix_client != "(Optionnel) Choisir un client":
                     cid, solde_du, plafond = option_client[choix_client]
                     client_id = cid
                 
-                # --- LOGIQUE D'ENREGISTREMENT DU CRÉDIT (SIMPLIFIÉE) ---
+                
                 if is_credit_sale:
                     if not client_id:
                         st.error("❌ Veuillez sélectionner un client pour une vente à crédit.")
@@ -175,19 +171,18 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                         st.error(f"❌ CRÉDIT REFUSÉ ! Le solde de {nouveau_solde:.2f} € dépasse le plafond de {plafond:.2f} €.")
                         st.stop()
                     
-                    # CORRECTION CRITIQUE: Mise à jour du solde du client (doit être déclenchée ici)
+                    # Mise à jour du solde du client (ACTION CRITIQUE)
                     sql_update_solde = "UPDATE clients SET solde_du = solde_du + %s WHERE id = %s"
                     exec_query(sql_update_solde, (total_panier, client_id))
                     montant_credit_transaction = total_panier
-                else:
-                    montant_credit_transaction = 0.0
                 
                 
                 # Enregistrement des produits vendus et mise à jour du stock
                 is_first_item = True
                 for item in current_cart:
                     
-                    # Le montant total du crédit (montant_credit_transaction) n'est enregistré que sur le premier article du panier
+                    # Enregistre le montant total du crédit (montant_credit_transaction) uniquement sur le premier article
+                    # pour que l'historique puisse le filtrer facilement.
                     credit_amount_to_record = montant_credit_transaction if is_first_item else 0.0
                     is_first_item = False 
                     
@@ -207,7 +202,7 @@ def handle_sale(cart_key, is_credit_sale, client_selection_optional=False):
                 st.rerun() 
 
 
-# --- NOUVEAU SYSTÈME DE NAVIGATION PAR ONGLETS (RÉ-INCLUS) ---
+# --- NOUVEAU SYSTÈME DE NAVIGATION PAR ONGLETS ---
 
 tab_vendre, tab_clients, tab_remb, tab_historique, tab_stock, tab_ajouter = st.tabs(
     ["Vendre 🛒", "Clients & Crédit 👤", "Remboursement Client 💵", "Historique Ventes 🧾", "Stock 📦", "Ajouter Produit ➕"]
@@ -227,7 +222,8 @@ with tab_vendre:
         col_add, col_finalize = st.columns([1, 1])
 
         with col_add:
-            produits_db = exec_query("SELECT id, nom, prix, quantite FROM produits WHERE quantite > 0 ORDER BY nom", fetch=True)
+            sql_produits_credit = """SELECT id, nom, prix, quantite FROM produits WHERE quantite > 0 ORDER BY nom"""
+            produits_db = exec_query(sql_produits_credit, fetch=True)
             option_produit = {p[1]: (p[0], p[2], p[3]) for p in produits_db} 
             
             with st.form("form_add_to_cart_credit", clear_on_submit=True):
@@ -251,7 +247,8 @@ with tab_vendre:
         col_add, col_finalize = st.columns([1, 1])
         
         with col_add:
-            produits_db = exec_query("SELECT id, nom, prix, quantite FROM produits WHERE quantite > 0 ORDER BY nom", fetch=True)
+            sql_produits_cash = """SELECT id, nom, prix, quantite FROM produits WHERE quantite > 0 ORDER BY nom"""
+            produits_db = exec_query(sql_produits_cash, fetch=True)
             option_produit = {p[1]: (p[0], p[2], p[3]) for p in produits_db} 
             
             with st.form("form_add_to_cart_cash", clear_on_submit=True):
@@ -276,10 +273,192 @@ with tab_vendre:
 with tab_remb:
     st.header("💵 Enregistrement d'un Paiement/Avance Client")
 
-    clients_db = exec_query("SELECT id, nom, solde_du FROM clients WHERE solde_du > 0 ORDER BY nom", fetch=True)
+    # Utilisation de la variable sécurisée pour la requête SQL
+    sql_clients_dette = """SELECT id, nom, solde_du FROM clients WHERE solde_du > 0 ORDER BY nom"""
+    clients_db = exec_query(sql_clients_dette, fetch=True)
     option_client = {c[1]: (c[0], c[2]) for c in clients_db} 
     
     if not clients_db:
         st.info("Aucun client n'a de dette en cours (solde dû = 0).")
     else:
-        with st.form("form
+        with st.form("form_remboursement"):
+            choix_client_remb = st.selectbox("Sélectionner le Client qui paie", list(option_client.keys()))
+            
+            if choix_client_remb:
+                cid, solde_actuel = option_client[choix_client_remb]
+                st.warning(f"Dette actuelle de {choix_client_remb}: {solde_actuel:.2f} €")
+                
+                montant_paye = st.number_input(
+                    "Montant payé (Avance)", 
+                    min_value=0.0, 
+                    max_value=solde_actuel, 
+                    step=100.0, 
+                    key="montant_paye_input"
+                )
+                
+                if st.form_submit_button("Enregistrer le Paiement"):
+                    
+                    sql_update_solde = "UPDATE clients SET solde_du = solde_du - %s WHERE id = %s"
+                    exec_query(sql_update_solde, (montant_paye, cid))
+                    
+                    sql_paiement = "INSERT INTO paiements (client_id, montant) VALUES (%s, %s)"
+                    exec_query(sql_paiement, (cid, montant_paye))
+                    
+                    nouveau_solde = solde_actuel - montant_paye
+                    st.success(f"✅ Paiement de {montant_paye:.2f} € enregistré pour {choix_client_remb}. Nouveau solde dû: {nouveau_solde:.2f} €.")
+                    st.rerun()
+
+# ----------------------------------------------------
+#               ONGLET : CLIENTS & CRÉDIT
+# ----------------------------------------------------
+with tab_clients:
+    st.header("Gestion des Clients, Plafonds et Historique")
+
+    with st.expander("➕ Ajouter un nouveau client"):
+        with st.form("ajout_client_form"):
+            nom = st.text_input("Nom du Client")
+            adresse = st.text_input("Adresse")
+            plafond_credit = st.number_input("Plafond de Crédit Max Autorisé", min_value=0.0, step=500.0, value=0.0)
+            
+            if st.form_submit_button("Créer le Client"):
+                sql = "INSERT INTO clients (nom, adresse, plafond_credit) VALUES (%s, %s, %s)"
+                exec_query(sql, (nom, adresse, plafond_credit))
+                st.success(f"👤 Client '{nom}' créé avec un plafond de {plafond_credit} €")
+
+    st.subheader("Liste des Clients")
+    sql_clients_list = """SELECT id, nom, adresse, plafond_credit, solde_du FROM clients ORDER BY solde_du DESC"""
+    df_clients = pd.read_sql(sql_clients_list, get_db_connection())
+
+    def color_du(val):
+        color = 'red' if val > 0 else 'black'
+        return f'color: {color}'
+
+    st.dataframe(
+        df_clients.style.applymap(color_du, subset=['solde_du']),
+        column_config={
+            "plafond_credit": st.column_config.NumberColumn("Plafond (€)", format="%.2f"),
+            "solde_du": st.column_config.NumberColumn("Solde Dû (€)", format="%.2f")
+        },
+        use_container_width=True
+    )
+
+    st.markdown("---")
+    st.subheader("Historique Détaillé du Client (Ventes et Paiements)")
+    
+    client_list = df_clients['nom'].tolist()
+    client_ids = {row['nom']: row['id'] for index, row in df_clients.iterrows()}
+    
+    if client_list:
+        choix_client_hist = st.selectbox("Choisir le client pour l'historique", client_list)
+        selected_client_id = client_ids[choix_client_hist]
+        
+        # 1. Historique des ventes (Produits pris)
+        st.markdown("##### 🧾 Produits pris (Comptant et Crédit)")
+        sql_ventes = """
+        SELECT 
+            p.nom AS "Produit",
+            v.quantite AS "Qté",
+            v.montant_credit AS "Crédit total",
+            v.date AS "Date Vente"
+        FROM ventes v
+        JOIN produits p ON v.produit_id = p.id
+        WHERE v.client_id = %s
+        ORDER BY v.date DESC
+        """
+        df_ventes = pd.read_sql(sql_ventes, get_db_connection(), params=(selected_client_id,))
+        
+        if not df_ventes.empty:
+            
+            df_ventes['Mode de Paiement'] = df_ventes['Crédit total'].apply(lambda x: "CRÉDIT" if x > 0 else "COMPTANT")
+            
+            df_ventes['Montant Crédit (€)'] = df_ventes.apply(
+                lambda row: row['Crédit total'] if row['Mode de Paiement'] == 'CRÉDIT' else 0.0, axis=1
+            )
+            
+            st.dataframe(df_ventes[['Date Vente', 'Produit', 'Qté', 'Montant Crédit (€)', 'Mode de Paiement']], use_container_width=True)
+        else:
+            st.info(f"{choix_client_hist} n'a pas de ventes enregistrées (ni comptant, ni crédit).")
+
+        # 2. Historique des paiements (Avances)
+        st.markdown("##### 💸 Historique des Paiements (Avances)")
+        sql_paiements = """
+        SELECT 
+            montant AS "Montant Payé (€)",
+            date AS "Date Paiement"
+        FROM paiements
+        WHERE client_id = %s
+        ORDER BY date DESC
+        """
+        df_paiements = pd.read_sql(sql_paiements, get_db_connection(), params=(selected_client_id,))
+        
+        if not df_paiements.empty:
+            st.dataframe(df_paiements, use_container_width=True)
+        else:
+            st.info(f"{choix_client_hist} n'a pas d'avances enregistrées.")
+    else:
+        st.info("Veuillez ajouter un client.")
+
+
+# ----------------------------------------------------
+#               ONGLET : HISTORIQUE VENTES
+# ----------------------------------------------------
+with tab_historique:
+    st.header("Historique de Toutes les Transactions")
+    
+    filtre_mode = st.radio(
+        "Filtrer par Mode de Paiement",
+        ("Toutes les ventes", "Ventes à Crédit 💳", "Ventes Comptant 💵"),
+        horizontal=True
+    )
+    
+    where_clause = ""
+    if filtre_mode == "Ventes à Crédit 💳":
+        where_clause = "v.montant_credit > 0"
+    elif filtre_mode == "Ventes Comptant 💵":
+        where_clause = "v.client_id IS NOT NULL AND v.montant_credit = 0"
+    
+    where_sql = f"WHERE {where_clause}" if where_clause else ""
+    
+    sql_history = f"""
+    SELECT 
+        v.id AS "ID Vente",
+        p.nom AS "Produit",
+        v.quantite AS "Qté",
+        c.nom AS "Client",
+        v.montant_credit AS "Montant Crédit (€)",
+        v.date AS "Date",
+        CASE WHEN v.montant_credit > 0 THEN 'CRÉDIT' WHEN v.client_id IS NOT NULL THEN 'COMPTANT' ELSE 'N/A' END AS "Mode de Paiement"
+    FROM ventes v
+    JOIN produits p ON v.produit_id = p.id
+    LEFT JOIN clients c ON v.client_id = c.id
+    {where_sql}
+    ORDER BY v.date DESC
+    LIMIT 100
+    """
+    df_history = pd.read_sql(sql_history, get_db_connection())
+    st.dataframe(df_history, use_container_width=True)
+
+
+# ----------------------------------------------------
+#               ONGLET : STOCK
+# ----------------------------------------------------
+with tab_stock:
+    st.header("État du Stock Actuel")
+    sql_stock_etat = """SELECT id, nom, prix, quantite FROM produits ORDER BY id"""
+    df = pd.read_sql(sql_stock_etat, get_db_connection())
+    st.dataframe(df, use_container_width=True)
+
+# ----------------------------------------------------
+#               ONGLET : AJOUTER PRODUIT
+# ----------------------------------------------------
+with tab_ajouter:
+    st.header("Nouveau Produit")
+    with st.form("ajout_produit_form_simple"):
+        nom = st.text_input("Nom du produit")
+        prix = st.number_input("Prix de vente", min_value=0.0, step=100.0)
+        qty = st.number_input("Quantité initiale", min_value=1, step=1)
+        
+        if st.form_submit_button("Ajouter le Produit"):
+            sql = "INSERT INTO produits (nom, prix, quantite) VALUES (%s, %s, %s)"
+            exec_query(sql, (nom, prix, qty))
+            st.success(f"✅ Produit '{nom}' ajouté !")
